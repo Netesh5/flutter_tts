@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 
 import 'language_helper.dart'; // Import the facade
+import 'nepali_tts_fallback_service.dart';
 
 void main() => runApp(const MyApp());
 
@@ -20,6 +21,11 @@ enum TtsState { playing, stopped, paused, continued }
 
 class MyAppState extends State<MyApp> {
   late FlutterTts flutterTts;
+  final NepaliTtsFallbackService _nepaliFallbackService =
+      NepaliTtsFallbackService(
+    // Set your backend endpoint that returns MP3 bytes or {"audioBase64": "..."}.
+    endpoint: null,
+  );
   List<String?> rawEngines = [];
   List<DropdownMenuItem<String?>> engineItems = [];
   String? engine;
@@ -190,15 +196,51 @@ class MyAppState extends State<MyApp> {
   }
 
   Future<void> _speak() async {
+    final String text = _newVoiceText?.trim() ?? '';
+    if (text.isEmpty) {
+      return;
+    }
+
+    final String selectedLanguage = language ?? voice?['locale'] ?? '';
+
+    final bool useFallback = await _nepaliFallbackService.shouldUseFallback(
+      tts: flutterTts,
+      isIOS: isIOS,
+      selectedLanguage: selectedLanguage,
+    );
+
+    if (useFallback) {
+      setState(() => ttsState = TtsState.playing);
+      try {
+        await _nepaliFallbackService.speakViaFallback(
+          text: text,
+          locale: selectedLanguage.isEmpty
+              ? NepaliTtsFallbackService.defaultNepaliLocale
+              : selectedLanguage,
+        );
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                'Nepali fallback is not configured or failed: $e',
+              ),
+            ),
+          );
+        }
+      } finally {
+        if (mounted) {
+          setState(() => ttsState = TtsState.stopped);
+        }
+      }
+      return;
+    }
+
     await flutterTts.setVolume(volume);
     await flutterTts.setSpeechRate(rate);
     await flutterTts.setPitch(pitch);
 
-    if (_newVoiceText != null) {
-      if (_newVoiceText!.isNotEmpty) {
-        await flutterTts.speak(_newVoiceText!);
-      }
-    }
+    await flutterTts.speak(text);
   }
 
   Future<void> _setAwaitOptions() async {
@@ -217,6 +259,7 @@ class MyAppState extends State<MyApp> {
 
   @override
   void dispose() {
+    _nepaliFallbackService.dispose();
     super.dispose();
     flutterTts.stop();
   }
